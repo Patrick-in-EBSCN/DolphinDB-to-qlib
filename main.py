@@ -1,365 +1,199 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-DolphinDB 数据获取器
-用于从DolphinDB数据库获取股票数据
-"""
-
-import os
-import pandas as pd
-import dolphindb as ddb
-from typing import List, Dict, Optional, Tuple
 from dotenv import load_dotenv
-import logging
-from datetime import datetime
+from dolphindb import session
+import os
+import csv
+import pandas as pd
+from typing import List, Dict
+from normalize import WindNormalize1d
 
 
-class DolphinDBDataCollector:
-    """DolphinDB数据获取器类"""
-    
-    def __init__(self, env_file: str = ".env"):
-        """
-        初始化数据获取器
-        
-        Args:
-            env_file: 环境变量文件路径
-        """
-        # 加载环境变量
-        load_dotenv(env_file)
-        
-        # 从环境变量获取连接信息
-        self.host = os.getenv("DOLPHINDB_HOST", "localhost")
-        self.port = int(os.getenv("DOLPHINDB_PORT", "8848"))
-        self.username = os.getenv("DOLPHINDB_USERNAME", "admin")
-        self.password = os.getenv("DOLPHINDB_PASSWORD", "123456")
-        
-        # 初始化连接对象
-        self.session = None
-        
-        # 设置日志
-        self._setup_logging()
-        
-    def _setup_logging(self):
-        """设置日志配置"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('dolphindb_collector.log'),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger(__name__)
-        
-    def connect(self) -> bool:
-        """
-        连接到DolphinDB服务器
-        
-        Returns:
-            bool: 连接是否成功
-        """
-        try:
-            self.session = ddb.session()
-            self.session.connect(self.host, self.port, self.username, self.password)
-            self.logger.info(f"成功连接到DolphinDB服务器: {self.host}:{self.port}")
-            return True
-        except Exception as e:
-            self.logger.error(f"连接DolphinDB失败: {e}")
-            return False
-            
-    def disconnect(self):
-        """断开DolphinDB连接"""
-        if self.session:
-            self.session.close()
-            self.logger.info("已断开DolphinDB连接")
-            
-    def load_stock_codes(self, file_path: str) -> pd.DataFrame:
-        """
-        从文件加载股票代码和时间范围
-        
-        Args:
-            file_path: 股票代码文件路径
-            
-        Returns:
-            pd.DataFrame: 包含symbol, start_date, end_date的DataFrame
-        """
-        try:
-            df = pd.read_csv(
-                file_path, 
-                sep='\t', 
-                header=None, 
-                names=['symbol', 'start_date', 'end_date']
-            )
-            
-            # 转换日期格式
-            df['start_date'] = pd.to_datetime(df['start_date'])
-            df['end_date'] = pd.to_datetime(df['end_date'])
-            
-            self.logger.info(f"成功加载{len(df)}条股票代码记录")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"加载股票代码文件失败: {e}")
-            return pd.DataFrame()
-            
-    def get_stock_data(self, 
-                      symbol: str, 
-                      start_date: str, 
-                      end_date: str, 
-                      table_name: str = "stock_daily",
-                      database_name: str = "dfs://stock") -> Optional[pd.DataFrame]:
-        """
-        获取单个股票的数据
-        
-        Args:
-            symbol: 股票代码
-            start_date: 开始日期 (YYYY-MM-DD)
-            end_date: 结束日期 (YYYY-MM-DD)
-            table_name: 表名
-            database_name: 数据库名
-            
-        Returns:
-            pd.DataFrame: 股票数据，如果失败返回None
-        """
-        if not self.session:
-            self.logger.error("未连接到DolphinDB服务器")
-            return None
-            
-        try:
-            # 构建DolphinDB查询语句
-            query = f"""
-            select * from loadTable("{database_name}", "{table_name}")
-            where symbol = "{symbol}" 
-            and date >= {start_date}
-            and date <= {end_date}
-            """
-            
-            # 执行查询
-            result = self.session.run(query)
-            
-            if result is not None and not result.empty:
-                self.logger.info(f"成功获取股票 {symbol} 的数据，共 {len(result)} 条记录")
-                return result
+def read_codes(file_path: str, n: int = 10) -> List[Dict[str, str]]:
+    """读取以制表符分隔的代码表，返回前 n 条记录。
+
+    每行预期至少有3列：symbol, start_date, end_date。忽略空行和列数不足的行。
+    返回的每条记录为 dict: {"symbol":..., "start_date":..., "end_date":...}
+    """
+    results: List[Dict[str, str]] = []
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter='\t')
+        for row in reader:
+            # 跳过空行或注释行
+            if not row:
+                continue
+            # 有些行可能包含额外的空白或注释，至少需要3列
+            if len(row) < 3:
+                continue
+            symbol = row[0].strip()
+            start_date = row[1].strip()
+            end_date = row[2].strip()
+            # 跳过表头（如果存在）
+            if symbol.lower() in ("symbol", "代码", "ticker"):
+                continue
+            # 重构 symbol: e.g. 'SZ000001' -> '000001.SZ', 'SH600000' -> '600000.SH'
+            if "." in symbol:
+                symbol_fmt = symbol
             else:
-                self.logger.warning(f"股票 {symbol} 在指定时间范围内无数据")
-                return pd.DataFrame()
-                
-        except Exception as e:
-            self.logger.error(f"获取股票 {symbol} 数据失败: {e}")
-            return None
-            
-    def get_batch_stock_data(self, 
-                           stock_codes_df: pd.DataFrame,
-                           table_name: str = "stock_daily",
-                           database_name: str = "dfs://stock",
-                           save_to_file: bool = True,
-                           output_dir: str = "data") -> Dict[str, pd.DataFrame]:
-        """
-        批量获取股票数据
-        
-        Args:
-            stock_codes_df: 包含股票代码和时间范围的DataFrame
-            table_name: 表名
-            database_name: 数据库名
-            save_to_file: 是否保存到文件
-            output_dir: 输出根目录
-            
-        Returns:
-            Dict[str, pd.DataFrame]: 股票代码到数据的映射
-        """
-        if not self.session:
-            self.logger.error("未连接到DolphinDB服务器")
-            return {}
-            
-        results = {}
-        
-        # 根据table_name创建对应的输出目录
-        if save_to_file:
-            table_output_dir = os.path.join(output_dir, table_name)
-            os.makedirs(table_output_dir, exist_ok=True)
-            
-        total_stocks = len(stock_codes_df)
-        self.logger.info(f"开始批量获取 {total_stocks} 只股票的数据")
-        
-        for idx, row in stock_codes_df.iterrows():
-            symbol = row['symbol']
-            start_date = row['start_date'].strftime('%Y.%m.%d')
-            end_date = row['end_date'].strftime('%Y.%m.%d')
-            
-            self.logger.info(f"正在获取股票 {symbol} 数据 ({idx+1}/{total_stocks})")
-            
-            # 获取数据
-            data = self.get_stock_data(symbol, start_date, end_date, table_name, database_name)
-            
-            if data is not None and not data.empty:
-                results[symbol] = data
-                
-                # 保存到文件
-                if save_to_file:
-                    filename = f"{symbol}_{start_date.replace('.', '_')}_{end_date.replace('.', '_')}.csv"
-                    filepath = os.path.join(table_output_dir, filename)
-                    data.to_csv(filepath, index=False)
-                    self.logger.info(f"数据已保存到: {filepath}")
-                    
-        self.logger.info(f"批量获取完成，成功获取 {len(results)} 只股票的数据")
-        return results
-        
-    def get_table_schema(self, table_name: str, database_name: str = "dfs://stock") -> Optional[pd.DataFrame]:
-        """
-        获取表结构信息
-        
-        Args:
-            table_name: 表名
-            database_name: 数据库名
-            
-        Returns:
-            pd.DataFrame: 表结构信息
-        """
-        if not self.session:
-            self.logger.error("未连接到DolphinDB服务器")
-            return None
-            
-        try:
-            query = f'schema(loadTable("{database_name}", "{table_name}"))'
-            result = self.session.run(query)
-            self.logger.info(f"成功获取表 {table_name} 的结构信息")
-            return result
-        except Exception as e:
-            self.logger.error(f"获取表结构失败: {e}")
-            return None
-            
-    def list_tables(self, database_name: str = "dfs://stock") -> Optional[List[str]]:
-        """
-        列出数据库中的所有表
-        
-        Args:
-            database_name: 数据库名
-            
-        Returns:
-            List[str]: 表名列表
-        """
-        if not self.session:
-            self.logger.error("未连接到DolphinDB服务器")
-            return None
-            
-        try:
-            query = f'exec name from getTables("{database_name}")'
-            result = self.session.run(query)
-            if isinstance(result, list):
-                self.logger.info(f"数据库 {database_name} 中共有 {len(result)} 张表")
-                return result
-            else:
-                return []
-        except Exception as e:
-            self.logger.error(f"列出表失败: {e}")
-            return None
-            
-    def get_data_by_table_type(self, 
-                              stock_codes_df: pd.DataFrame,
-                              table_type: str = "daily",
-                              save_to_file: bool = True,
-                              output_dir: str = "data") -> Dict[str, pd.DataFrame]:
-        """
-        根据表类型获取股票数据（使用config.py中的预定义配置）
-        
-        Args:
-            stock_codes_df: 包含股票代码和时间范围的DataFrame
-            table_type: 表类型（"daily", "minute", "fundamental", "financial"等）
-            save_to_file: 是否保存到文件
-            output_dir: 输出根目录
-            
-        Returns:
-            Dict[str, pd.DataFrame]: 股票代码到数据的映射
-        """
-        try:
-            from config import TABLE_CONFIGS
-            
-            if table_type not in TABLE_CONFIGS:
-                self.logger.error(f"未找到表类型 {table_type} 的配置")
-                return {}
-                
-            config = TABLE_CONFIGS[table_type]
-            table_name = config["table_name"]
-            database_name = config["database_name"]
-            
-            self.logger.info(f"使用配置获取{config['description']}")
-            
-            return self.get_batch_stock_data(
-                stock_codes_df=stock_codes_df,
-                table_name=table_name,
-                database_name=database_name,
-                save_to_file=save_to_file,
-                output_dir=output_dir
-            )
-            
-        except ImportError:
-            self.logger.warning("无法导入config.py，请检查配置文件")
-            return {}
-        except Exception as e:
-            self.logger.error(f"根据表类型获取数据失败: {e}")
-            return {}
+                prefix = symbol[:2].upper() if len(symbol) >= 2 else ""
+                rest = symbol[2:] if len(symbol) > 2 else symbol
+                if prefix in ("SZ", "SH") and rest:
+                    symbol_fmt = f"{rest}.{prefix}"
+                else:
+                    symbol_fmt = symbol
+
+            results.append({"symbol": symbol_fmt, "start_date": start_date, "end_date": end_date, "original_symbol": symbol})
+            if len(results) >= n:
+                break
+    return results
 
 
-def main():
-    """主函数示例"""
-    # 创建数据获取器实例
-    collector = DolphinDBDataCollector()
+def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, start_date, end_date, original_symbol, data_dir="data", normalize_data=True):
+    """从 DolphinDB 获取指定股票的 AShareEODPrices 数据，进行标准化并保存到文件
     
+    Args:
+        host, port, user, password: DolphinDB 连接参数
+        db_path, db_table: 数据库路径和表名 (AShareEODPrices)
+        symbol: 重构后的股票代码 (如 000001.SZ)
+        start_date, end_date: 数据时间范围 (格式: YYYY-MM-DD)
+        original_symbol: 原始股票代码 (如 SZ000001)，用作文件名
+        data_dir: 保存数据的目录
+        normalize_data: 是否对数据进行标准化处理
+        
+    AShareEODPrices 表字段:
+        S_INFO_WINDCODE (Wind代码), TRADE_DT (交易日期),
+        S_DQ_OPEN (开盘价), S_DQ_HIGH (最高价), 
+        S_DQ_LOW (最低价), S_DQ_CLOSE (收盘价),
+        S_DQ_PCTCHANGE (涨跌幅), S_DQ_VOLUME (成交量), S_DQ_AMOUNT (成交金额),
+        S_DQ_ADJOPEN (复权开盘价), S_DQ_ADJHIGH (复权最高价),
+        S_DQ_ADJLOW (复权最低价), S_DQ_ADJCLOSE (复权收盘价), S_DQ_ADJFACTOR (复权因子),
+        S_DQ_AVGPRICE (均价VWAP)
+    """
+    s = session()
     try:
-        # 连接到DolphinDB
-        if not collector.connect():
-            print("连接失败，程序退出")
-            return
+        s.connect(host, port, user, password)
+        
+        # 将日期格式从 YYYY-MM-DD 转换为 DolphinDB DATE 格式
+        # DolphinDB 中日期需要使用 date() 函数或特定格式
+        start_date_fmt = start_date.replace('-', '.')
+        end_date_fmt = end_date.replace('-', '.')
+        
+        # 构造查询脚本 - 根据 AShareEODPrices 表结构
+        script = f'''
+        db = loadTable("{db_path}", "{db_table}")
+        SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_OPEN, S_DQ_HIGH, S_DQ_LOW, S_DQ_CLOSE,
+               S_DQ_VOLUME, S_DQ_AMOUNT, S_DQ_ADJCLOSE
+        FROM db
+        WHERE S_INFO_WINDCODE = "{symbol}"
+          AND TRADE_DT >= date({start_date_fmt})
+          AND TRADE_DT <= date({end_date_fmt})
+        ORDER BY TRADE_DT
+        '''
+        
+        print(f"正在获取 {symbol} ({original_symbol}) 从 {start_date} 到 {end_date} 的数据...")
+        print(f"查询脚本: {script}")
+        
+        raw_data = s.run(script)
+        
+        if raw_data is not None and len(raw_data) > 0:
+            print(f"从DolphinDB获取到 {len(raw_data)} 条原始记录")
+            print(f"原始数据列: {list(raw_data.columns)}")
             
-        # 加载股票代码
-        stock_codes = collector.load_stock_codes("code/csi300.txt")
-        if stock_codes.empty:
-            print("加载股票代码失败")
-            return
+            # 数据标准化处理
+            if normalize_data:
+                print("开始Wind数据标准化...")
+                normalizer = WindNormalize1d()
+                
+                try:
+                    # 使用WindNormalize1d进行标准化
+                    normalized_data = normalizer.normalize(raw_data)
+                    
+                    if not normalized_data.empty:
+                        print(f"标准化后数据: {len(normalized_data)} 条记录")
+                        print(f"标准化后列: {list(normalized_data.columns)}")
+                        data_to_save = normalized_data
+                    else:
+                        print("警告: 标准化后数据为空，保存原始数据")
+                        data_to_save = raw_data
+                        
+                except Exception as norm_error:
+                    print(f"数据标准化出错: {norm_error}")
+                    print("保存原始数据")
+                    data_to_save = raw_data
+            else:
+                print("跳过数据标准化，保存原始数据")
+                data_to_save = raw_data
             
-        # 显示前几条记录
-        print("股票代码示例：")
-        print(stock_codes.head())
-        
-        # 列出可用的表（可选）
-        print("\n检查可用的表...")
-        tables = collector.list_tables()
-        if tables:
-            print(f"可用的表: {tables}")
-        
-        # 获取表结构（可选，需要指定具体的表名）
-        # table_name = "stock_daily"  # 请根据实际情况修改
-        # schema = collector.get_table_schema(table_name)
-        # if schema is not None:
-        #     print(f"\n表 {table_name} 的结构:")
-        #     print(schema)
-        
-        # 获取前5只股票的数据作为示例
-        print("\n开始获取前5只股票的数据...")
-        sample_data = stock_codes.head(5)
-        
-        # 批量获取数据（请根据实际情况修改表名）
-        # 数据将保存到 data/stock_daily/ 目录下
-        results = collector.get_batch_stock_data(
-            sample_data, 
-            table_name="stock_daily",  # 请根据实际表名修改
-            database_name="dfs://stock"  # 请根据实际数据库名修改
-        )
-        
-        # 或者使用预定义的配置
-        # results = collector.get_data_by_table_type(sample_data, "daily")
-        
-        print(f"\n成功获取了 {len(results)} 只股票的数据")
-        print(f"数据已保存到 data/stock_daily/ 目录下")
-        
-    except KeyboardInterrupt:
-        print("\n用户中断程序")
+            # 确保 data 目录存在
+            os.makedirs(data_dir, exist_ok=True)
+            
+            # 保存数据文件
+            filename = f"{original_symbol}.csv" if normalize_data else f"{original_symbol}_raw.csv"
+            filepath = os.path.join(data_dir, filename)
+            
+            data_to_save.to_csv(filepath, index=False)
+            print(f"数据已保存到: {filepath}")
+            
+            return data_to_save
+            
+        else:
+            print(f"未找到 {symbol} 的数据")
+            return None
+            
     except Exception as e:
-        print(f"程序执行出错: {e}")
+        print(f"获取 {symbol} 数据时出错: {e}")
+        return None
     finally:
-        # 断开连接
-        collector.disconnect()
+        s.close()
 
 
 if __name__ == "__main__":
-    main()
+    load_dotenv(".env")
+    host = os.getenv("DOLPHINDB_HOST", "localhost")
+    port = int(os.getenv("DOLPHINDB_PORT", "8848"))
+    user = os.getenv("DOLPHINDB_USERNAME", "admin")
+    password = os.getenv("DOLPHINDB_PASSWORD", "123456")
+
+    print("连接到 DolphinDB 数据库", (host, port, user, password))
+    try:
+        s = session()
+        # 尝试连接DolphinDB
+        s.connect(host, port, user, password)
+        print("DolphinDB 连接成功")
+    except Exception as e:
+        print("连接 DolphinDB 失败:", e)
+
+    # 读取 code/csi300.txt 前3条记录以供测试
+    file_path = os.path.join(os.path.dirname(__file__), "code", "csi300.txt")
+    print(file_path)
+    try:
+        codes = read_codes(file_path, 3)  # 先测试前3条
+        print("前3条 code/csi300.txt 数据:")
+        for i, item in enumerate(codes, 1):
+            print(f"{i}: {item['symbol']}  {item['start_date']}  {item['end_date']}")
+        
+        # 为前3条记录获取数据并保存
+        print("\n开始获取并保存数据...")
+        db_path = 'dfs://WIND_AShareEODPrices'
+        db_table = 'AShareEODPrices'
+        
+        for item in codes:
+            result = fetch_and_save_data(
+                host, port, user, password,
+                db_path, db_table,
+                item['symbol'],        # 重构后的 symbol (000001.SZ)
+                item['start_date'],    # 开始日期
+                item['end_date'],      # 结束日期
+                item['original_symbol'], # 原始 symbol (SZ000001)
+                normalize_data=True    # 启用数据标准化
+            )
+            
+            if result is not None:
+                print(f"✅ {item['symbol']} 数据获取和标准化完成")
+            else:
+                print(f"❌ {item['symbol']} 数据处理失败")
+            print("-" * 50)
+            
+    except Exception as e:
+        print("处理过程中出错:", e)
