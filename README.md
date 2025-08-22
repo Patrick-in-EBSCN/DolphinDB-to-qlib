@@ -25,239 +25,108 @@ DolphinDB_data_collector/
 ├── data/               # 数据输出目录（按表名分类）
 │   ├── stock_daily/    # 日线数据
 │   ├── stock_minute/   # 分钟线数据
-│   ├── stock_fundamental/ # 基本面数据
-│   └── stock_financial/   # 财务数据
-└── README.md           # 说明文档
+```markdown
+# DolphinDB 数据获取器
+
+这是一个用于从 DolphinDB 获取股票数据并保存为 CSV 的 Python 工具，包含对 Wind 风格数据到 qlib 风格的基础标准化功能（例如日期解析、列映射、停牌处理和复权字段对齐）。
+
+## 主要功能
+
+- 从 `.env` 读取 DolphinDB 连接配置
+- 批量/单只股票数据拉取并保存为 CSV
+- 支持自定义查询和表配置
+- 可选的 Wind -> qlib 简易标准化（见 `normalize.py`）
+- 将结果按表/类型分类保存到 `data/` 目录
+
+## 项目结构（简要）
+
+```
+DolphinDB_data_collector/
+├── main.py              # 主程序（示例化连接、批量流程）
+├── normalize.py         # Wind -> qlib 简易标准化逻辑
+├── code/                # 输入的股票代码文件（制表符分隔）
+│   └── csi300.txt
+├── data/                # 输出目录（CSV 文件）
+└── README.md
 ```
 
-## 安装依赖
+## 快速安装
+
+建议在虚拟环境中安装依赖：
 
 ```bash
 pip install dolphindb python-dotenv pandas numpy
 ```
 
-## 配置说明
+（如果你的环境已经有这些包，可跳过安装步骤。）
 
-### 1. 环境变量配置（.env文件）
+## 配置（.env）
+
+在仓库根目录创建 `.env`，示例：
 
 ```env
-# DolphinDB 连接配置
 DOLPHINDB_HOST=localhost
 DOLPHINDB_PORT=8848
 DOLPHINDB_USERNAME=admin
 DOLPHINDB_PASSWORD=123456
 ```
 
-### 2. 股票代码文件格式（code/csi300.txt）
+## 股票代码文件格式
 
-文件采用制表符（\t）分隔，包含三列：
-- 第1列：股票代码（symbol）
-- 第2列：开始日期（start_date）
-- 第3列：结束日期（end_date）
+将要批量拉取的股票列表放在 `code/csi300.txt`，文件为制表符分隔（TSV），每行三列：
+
+- symbol（例如 `SZ000001`）
+- start_date（格式 YYYY-MM-DD 或 YYYY.MM.DD）
+- end_date（格式 YYYY-MM-DD 或 YYYY.MM.DD）
 
 示例：
+
 ```
 SZ000001	2005-04-08	2005-06-30
 SZ000002	2005-04-08	2005-06-30
 ```
 
-## 使用方法
+说明：脚本会把 Wind 风格代码（`SZ000001`）按需要转换为 `000001.SZ` 用于 DolphinDB 查询。
 
-### 基本使用
+## 使用示例（Python）
+
+下面示例假设 `main.py` 提供了一个简单的流程函数或类（项目里可能使用不同命名，若不一致请按实际代码调整）。
 
 ```python
 from main import DolphinDBDataCollector
 
-# 创建数据获取器实例
 collector = DolphinDBDataCollector()
-
-# 连接到DolphinDB
 collector.connect()
 
-# 加载股票代码
-stock_codes = collector.load_stock_codes("code/csi300.txt")
-
-# 批量获取数据
-results = collector.get_batch_stock_data(
-    stock_codes.head(10),  # 获取前10只股票
-    table_name="stock_daily",
-    database_name="dfs://stock"
-)
+# 从文件加载代码并获取前 10 支股票的数据
+codes = collector.load_stock_codes('code/csi300.txt')
+results = collector.get_batch_stock_data(codes.head(10), table_name='AShareEODPrices')
 
 # 断开连接
 collector.disconnect()
 ```
 
-### 获取单只股票数据
+如果你的 `main.py` 采用的是函数式接口，也可以直接使用类似 `fetch_and_save_data(host, port, symbol, start, end)` 的函数（以项目中的实际函数签名为准）。
 
-```python
-data = collector.get_stock_data(
-    symbol="SZ000001",
-    start_date="2024.01.01", 
-    end_date="2024.01.31",
-    table_name="stock_daily",
-    database_name="dfs://stock"
-)
+## 输出组织
 
-# 断开连接
-collector.disconnect()
-```
+默认把结果保存到 `data/` 下，按表或数据类型分子目录，例如：
 
-### 获取单只股票数据
+- `data/stock_daily/`（日线）
+- `data/stock_minute/`（分钟线）
 
-```python
-data = collector.get_stock_data(
-    symbol="SZ000001",
-    start_date="2024.01.01", 
-    end_date="2024.01.31",
-    table_name="stock_daily",
-    database_name="dfs://stock"
-)
-```
+文件命名示例：`SZ0000010.csv`
 
-### 使用配置文件
+## 常见问题与提示
 
-```python
-from config import TABLE_CONFIGS
+- 连接失败：确认 DolphinDB 服务已启动并且 `.env` 中配置正确的 host/port。可以用 ping 或 telnet 测试端口连通性。
+- 日期比较：DolphinDB 的时间分区字段通常需要与日期类型比较（例如使用 `date(2005-04-08)`），请注意查询里日期的格式和类型。
+- 空数据：确认表名、字段名与数据库中实际一致；Wind 风格字段名与表结构可能有所差异，请按实际表结构调整查询字段。
 
-# 方法1: 使用预定义的日线数据配置
-daily_config = TABLE_CONFIGS["daily"]
+## 开发与扩展建议
 
-results = collector.get_batch_stock_data(
-    stock_codes,
-    table_name=daily_config["table_name"],
-    database_name=daily_config["database_name"]
-)
-# 数据自动保存到 data/stock_daily/ 目录
-
-# 方法2: 使用便捷方法
-results = collector.get_data_by_table_type(stock_codes, "daily")
-# 自动使用配置文件中的设置
-```
-
-### 文件保存结构
-
-数据会按照表名自动分类保存：
+- 如果要做大规模并发拉取，建议加上重试与并发控制（例如 multiprocessing / asyncio + 限速）。
+- 标准化：当前 `normalize.py` 提供基础功能，可按需扩展复权、对齐交易日历或生成训练所需特征。
 
 ```
-data/
-├── stock_daily/          # 日线数据
-│   ├── SZ000001_2005_04_08_2005_06_30.csv
-│   ├── SZ000002_2005_04_08_2005_06_30.csv
-│   └── ...
-├── stock_minute/         # 分钟线数据
-│   ├── SZ000001_2024_01_01_2024_01_31.csv
-│   └── ...
-├── stock_fundamental/    # 基本面数据
-│   └── ...
-└── stock_financial/      # 财务数据
-    └── ...
-```
 
-### 自定义查询
-
-```python
-# 执行自定义DolphinDB查询
-custom_query = """
-select symbol, date, close, volume 
-from loadTable("dfs://stock", "stock_daily")
-where symbol in ("SZ000001", "SZ000002")
-and date >= 2024.01.01
-"""
-
-result = collector.session.run(custom_query)
-```
-
-## 数据表配置
-
-在`config.py`中预定义了常用的数据表配置：
-
-- `daily`: 日线数据表
-- `minute`: 分钟线数据表
-- `fundamental`: 基本面数据表
-- `financial`: 财务数据表
-
-可以根据实际的DolphinDB数据库结构修改这些配置。
-
-## 运行示例
-
-```bash
-# 运行主程序
-python main.py
-
-# 运行示例程序
-python examples.py
-
-# 查看文件结构演示
-python demo_structure.py
-```
-
-## 输出文件组织
-
-### 自动分类保存
-
-获取的数据会按照表名自动分类保存到`data`目录下的对应子文件夹中：
-
-- **日线数据**: `data/stock_daily/`
-- **分钟线数据**: `data/stock_minute/`
-- **基本面数据**: `data/stock_fundamental/`
-- **财务数据**: `data/stock_financial/`
-
-### 文件命名规则
-
-文件名格式：`{股票代码}_{开始日期}_{结束日期}.csv`
-
-例如：`SZ000001_2024_01_01_2024_01_31.csv`
-
-### 自定义保存位置
-
-可以通过`output_dir`参数自定义根目录：
-
-```python
-results = collector.get_batch_stock_data(
-    stock_codes,
-    table_name="stock_daily",
-    output_dir="my_data"  # 数据将保存到 my_data/stock_daily/
-)
-```
-
-## 注意事项
-
-1. **确保DolphinDB服务器正在运行**
-2. **修改.env文件中的连接信息**
-3. **根据实际情况修改表名和数据库名**
-4. **确保有足够的磁盘空间存储输出文件**
-5. **大批量数据获取时注意网络稳定性**
-
-## 日志
-
-程序会生成日志文件`dolphindb_collector.log`，记录：
-- 连接状态
-- 数据获取进度
-- 错误信息
-- 操作统计
-
-## 常见问题
-
-### 1. 连接失败
-- 检查DolphinDB服务器是否启动
-- 验证.env文件中的连接信息
-- 确认网络连通性
-
-### 2. 表不存在
-- 检查数据库名和表名是否正确
-- 使用`list_tables()`方法查看可用的表
-
-### 3. 数据为空
-- 验证股票代码格式
-- 检查日期范围是否有数据
-- 确认数据表中是否包含相应的股票数据
-
-## 扩展功能
-
-可以根据需要扩展以下功能：
-- 支持更多数据类型（期货、债券等）
-- 添加数据验证和清洗功能
-- 支持并行数据获取
-- 添加数据可视化功能
-- 集成到定时任务中
