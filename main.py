@@ -170,21 +170,24 @@ if __name__ == "__main__":
     except Exception as e:
         print("连接 DolphinDB 失败:", e)
 
-    # 读取 code/csi300.txt 前3条记录以供测试
+    # 读取 code/csi300.txt 所有记录
     file_path = os.path.join(os.path.dirname(__file__), "code", "csi300.txt")
     print(file_path)
     try:
-        codes = read_codes(file_path, 3)  # 先测试前3条
-        print("前3条 code/csi300.txt 数据:")
-        for i, item in enumerate(codes, 1):
-            print(f"{i}: {item['symbol']}  {item['start_date']}  {item['end_date']}")
+        codes = read_codes(file_path, n=999999)  # 读取所有股票，设置一个足够大的数字
+        print(f"共加载 {len(codes)} 支股票:")
         
-        # 为前3条记录获取数据并保存
-        print("\n开始获取并保存数据...")
+        # 为所有记录获取数据并保存
+        print(f"\n开始获取并保存 {len(codes)} 支股票的数据...")
         db_path = 'dfs://WIND_AShareEODPrices'
         db_table = 'AShareEODPrices'
         
-        for item in codes:
+        success_count = 0
+        failed_count = 0
+        
+        for i, item in enumerate(codes, 1):
+            print(f"\n[{i}/{len(codes)}] 处理 {item['symbol']} ({item['original_symbol']})")
+            
             result = fetch_and_save_data(
                 host, port, user, password,
                 db_path, db_table,
@@ -196,10 +199,19 @@ if __name__ == "__main__":
             )
             
             if result is not None:
-                print(f"✅ {item['symbol']} 数据获取和标准化完成")
+                success_count += 1
+                print(f"✅ {item['symbol']} 数据获取和标准化完成 ({len(result)} 条记录)")
             else:
+                failed_count += 1
                 print(f"❌ {item['symbol']} 数据处理失败")
+            
             print("-" * 50)
+        
+        # 总结
+        print(f"\n处理完成!")
+        print(f"成功: {success_count} 支股票")
+        print(f"失败: {failed_count} 支股票")
+        print(f"总计: {len(codes)} 支股票")
             
     except Exception as e:
         print("处理过程中出错:", e)
