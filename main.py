@@ -162,7 +162,9 @@ def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, s
             # 数据标准化处理
             if normalize_data:
                 print("开始Wind数据标准化...")
-                normalizer = WindNormalize1d()
+                # 构建交易日历文件路径
+                calendar_file = os.path.join(os.path.dirname(__file__), "calendar", "day.txt")
+                normalizer = WindNormalize1d(calendar_file_path=calendar_file)
                 
                 try:
                     # 使用WindNormalize1d进行标准化
@@ -171,11 +173,6 @@ def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, s
                     if not normalized_data.empty:
                         print(f"标准化后数据: {len(normalized_data)} 条记录")
                         print(f"标准化后列: {list(normalized_data.columns)}")
-                        
-                        # 将symbol列修改为original_symbol
-                        if 'symbol' in normalized_data.columns:
-                            normalized_data['symbol'] = original_symbol
-                            print(f"已将symbol列更新为: {original_symbol}")
                         
                         data_to_save = normalized_data
                     else:

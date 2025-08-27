@@ -18,7 +18,6 @@ class WindNormalize1d:
     
     # Wind字段到标准字段的映射
     WIND_FIELD_MAPPING = {
-        'S_INFO_WINDCODE': 'symbol',
         'TRADE_DT': 'date',
         'S_DQ_OPEN': 'open',
         'S_DQ_HIGH': 'high',
@@ -33,7 +32,7 @@ class WindNormalize1d:
     COLUMNS = ["open", "close", "high", "low", "volume"]
     DATE_FORMAT = "%Y-%m-%d"
 
-    def __init__(self, calendar_file_path: str = None, date_field_name: str = "date", symbol_field_name: str = "symbol"):
+    def __init__(self, calendar_file_path: str = None, date_field_name: str = "date"):
         """
         初始化Wind数据标准化处理器
         
@@ -43,12 +42,15 @@ class WindNormalize1d:
             交易日历文件路径 (calendar/day.txt)
         date_field_name : str
             日期字段名称，默认为 "date"
-        symbol_field_name : str
-            股票代码字段名称，默认为 "symbol"
         """
         self._date_field_name = date_field_name
-        self._symbol_field_name = symbol_field_name
-        self._calendar_list = self._load_calendar(calendar_file_path) if calendar_file_path else None
+        
+        # 如果没有提供日历文件路径，使用默认路径
+        if calendar_file_path is None:
+            print("Info: No calendar file path provided, using default 'calendar/day.txt'")
+            calendar_file_path = "calendar/day.txt"
+            
+        self._calendar_list = self._load_calendar(calendar_file_path)
 
     def _load_calendar(self, calendar_file_path: str = "calendar/day.txt") -> list:
         """
@@ -108,6 +110,11 @@ class WindNormalize1d:
         # 执行字段重命名
         df = df.rename(columns=available_mappings)
         
+        # 删除股票代码列（如果存在）
+        if 'S_INFO_WINDCODE' in df.columns:
+            df = df.drop(columns=['S_INFO_WINDCODE'])
+            print("Info: Removed S_INFO_WINDCODE column")
+        
         # 记录映射信息
         print(f"Info: Mapped fields: {available_mappings}")
         
@@ -161,7 +168,6 @@ class WindNormalize1d:
         df = self.map_wind_fields(df)
         
         # 2. 基础数据处理
-        symbol = df.loc[df[self._symbol_field_name].first_valid_index(), self._symbol_field_name]
         columns = copy.deepcopy(self.COLUMNS)
         df = df.copy()
         
@@ -188,7 +194,7 @@ class WindNormalize1d:
         df.sort_index(inplace=True)
         
         # 7. 处理无效成交量数据
-        df.loc[(df["volume"] <= 0) | np.isnan(df["volume"]), list(set(df.columns) - {self._symbol_field_name})] = np.nan
+        df.loc[(df["volume"] <= 0) | np.isnan(df["volume"]), df.columns] = np.nan
 
         # 8. 检测并修正异常数据 (参考Yahoo处理逻辑)
         _count = 0
@@ -202,7 +208,7 @@ class WindNormalize1d:
             df.loc[_mask, available_cols] = df.loc[_mask, available_cols] / 100
             _count += 1
             if _count >= 10:
-                print(f"Warning: {symbol} `change` is abnormal for {_count} consecutive days, please check the data carefully")
+                print(f"Warning: Stock `change` is abnormal for {_count} consecutive days, please check the data carefully")
                 break
 
         # 9. 计算涨跌幅
@@ -213,8 +219,7 @@ class WindNormalize1d:
         available_columns = [col for col in columns if col in df.columns]
         df.loc[(df["volume"] <= 0) | np.isnan(df["volume"]), available_columns] = np.nan
 
-        # 11. 恢复symbol字段
-        df[self._symbol_field_name] = symbol
+        # 11. 设置索引名称
         df.index.names = [self._date_field_name]
         
         return df.reset_index()
@@ -299,8 +304,8 @@ class WindNormalize1d:
         _close = self._get_first_close(df)
         
         for _col in df.columns:
-            # 保留原始adjclose，symbol和change字段
-            if _col in [self._symbol_field_name, "adjclose", "change"]:
+            # 跳过非数值列和特殊字段
+            if _col in ["adjclose", "change", self._date_field_name] or not pd.api.types.is_numeric_dtype(df[_col]):
                 continue
             if _col == "volume":
                 df[_col] = df[_col] * _close
