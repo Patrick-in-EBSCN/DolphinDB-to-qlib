@@ -182,6 +182,7 @@ class WindNormalize1d:
                 ]
                 .index
             )
+            print('重新索引')
         
         # 6. 排序
         df.sort_index(inplace=True)
