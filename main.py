@@ -49,6 +49,65 @@ def read_codes(file_path: str, n: int = 10) -> List[Dict[str, str]]:
     return results
 
 
+def get_unique_csi300_codes(file_path: str) -> List[Dict[str, str]]:
+    """获取CSI300股票代码去重，固定时间范围为2008-01-01到2025-08-01
+    
+    Returns:
+        List[Dict[str, str]]: 去重后的股票代码列表，每个包含symbol, start_date, end_date, original_symbol
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    
+    # 使用set来去重股票代码
+    unique_symbols = set()
+    results = []
+    
+    # 固定的时间范围
+    fixed_start_date = "2008-01-01"
+    fixed_end_date = "2025-08-01"
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter='\t')
+        for row in reader:
+            # 跳过空行或注释行
+            if not row:
+                continue
+            # 有些行可能包含额外的空白或注释，至少需要1列（股票代码）
+            if len(row) < 1:
+                continue
+            
+            symbol = row[0].strip()
+            
+            # 跳过表头（如果存在）
+            if symbol.lower() in ("symbol", "代码", "ticker"):
+                continue
+            
+            # 如果这个股票代码还没有添加过，则添加
+            if symbol not in unique_symbols:
+                unique_symbols.add(symbol)
+                
+                # 重构 symbol: e.g. 'SZ000001' -> '000001.SZ', 'SH600000' -> '600000.SH'
+                if "." in symbol:
+                    symbol_fmt = symbol
+                else:
+                    prefix = symbol[:2].upper() if len(symbol) >= 2 else ""
+                    rest = symbol[2:] if len(symbol) > 2 else symbol
+                    if prefix in ("SZ", "SH") and rest:
+                        symbol_fmt = f"{rest}.{prefix}"
+                    else:
+                        symbol_fmt = symbol
+                
+                results.append({
+                    "symbol": symbol_fmt, 
+                    "start_date": fixed_start_date, 
+                    "end_date": fixed_end_date, 
+                    "original_symbol": symbol
+                })
+    
+    print(f"原始数据共有记录数，去重后获得 {len(results)} 个唯一股票代码")
+    return results
+
+
 def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, start_date, end_date, original_symbol, data_dir="data", normalize_data=True):
     """从 DolphinDB 获取指定股票的 AShareEODPrices 数据，进行标准化并保存到文件
     
@@ -170,12 +229,23 @@ if __name__ == "__main__":
     except Exception as e:
         print("连接 DolphinDB 失败:", e)
 
-    # 读取 code/csi300.txt 所有记录
+    # 读取 code/csi300.txt 并去重
     file_path = os.path.join(os.path.dirname(__file__), "code", "csi300.txt")
-    print(file_path)
+    print(f"读取CSI300股票代码文件: {file_path}")
+    
     try:
-        codes = read_codes(file_path, n=999999)  # 读取所有股票，设置一个足够大的数字
-        print(f"共加载 {len(codes)} 支股票:")
+        # 使用新的去重函数，固定时间范围为2008-01-01到2025-08-01
+        codes = get_unique_csi300_codes(file_path)
+        print(f"共获得 {len(codes)} 支去重后的CSI300股票")
+        print(f"数据时间范围: 2008-01-01 到 2025-08-01")
+        
+        # 显示前几个股票代码作为示例
+        if codes:
+            print(f"\n前10支股票示例:")
+            for i, code in enumerate(codes[:10]):
+                print(f"  {i+1}. {code['original_symbol']} -> {code['symbol']}")
+            if len(codes) > 10:
+                print(f"  ... 还有 {len(codes) - 10} 支股票")
         
         # 为所有记录获取数据并保存
         print(f"\n开始获取并保存 {len(codes)} 支股票的数据...")
@@ -192,8 +262,8 @@ if __name__ == "__main__":
                 host, port, user, password,
                 db_path, db_table,
                 item['symbol'],        # 重构后的 symbol (000001.SZ)
-                item['start_date'],    # 开始日期
-                item['end_date'],      # 结束日期
+                item['start_date'],    # 开始日期: 2008-01-01
+                item['end_date'],      # 结束日期: 2025-08-01
                 item['original_symbol'], # 原始 symbol (SZ000001)
                 normalize_data=True    # 启用数据标准化
             )
@@ -212,6 +282,7 @@ if __name__ == "__main__":
         print(f"成功: {success_count} 支股票")
         print(f"失败: {failed_count} 支股票")
         print(f"总计: {len(codes)} 支股票")
+        print(f"数据时间范围: 2008-01-01 到 2025-08-01")
             
     except Exception as e:
         print("处理过程中出错:", e)
