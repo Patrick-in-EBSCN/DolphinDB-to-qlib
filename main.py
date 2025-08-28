@@ -5,6 +5,7 @@ import csv
 import pandas as pd
 from typing import List, Dict
 from normalize import WindNormalize1d
+from logger import get_logger, close_logger
 
 
 def read_codes(file_path: str, n: int = 10) -> List[Dict[str, str]]:
@@ -108,7 +109,7 @@ def get_unique_csi300_codes(file_path: str) -> List[Dict[str, str]]:
     return results
 
 
-def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, start_date, end_date, original_symbol, data_dir="data", normalize_data=True):
+def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, start_date, end_date, original_symbol, data_dir="data", normalize_data=True, logger=None):
     """从 DolphinDB 获取指定股票的 AShareEODPrices 数据，进行标准化并保存到文件
     
     Args:
@@ -117,6 +118,9 @@ def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, s
         symbol: 重构后的股票代码 (如 000001.SZ)
         start_date, end_date: 数据时间范围 (格式: YYYY-MM-DD)
         original_symbol: 原始股票代码 (如 SZ000001)，用作文件名
+        data_dir: 保存数据的目录
+        normalize_data: 是否对数据进行标准化处理
+        logger: 日志记录器
         data_dir: 保存数据的目录
         normalize_data: 是否对数据进行标准化处理
         
@@ -150,41 +154,68 @@ def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, s
         ORDER BY TRADE_DT
         '''
         
-        print(f"正在获取 {symbol} ({original_symbol}) 从 {start_date} 到 {end_date} 的数据...")
-        print(f"查询脚本: {script}")
+        if logger:
+            logger.debug(f"获取 {symbol} ({original_symbol}) 从 {start_date} 到 {end_date} 的数据")
+            logger.debug(f"查询脚本: {script}")
+        else:
+            print(f"正在获取 {symbol} ({original_symbol}) 从 {start_date} 到 {end_date} 的数据...")
+            print(f"查询脚本: {script}")
         
         raw_data = s.run(script)
         
         if raw_data is not None and len(raw_data) > 0:
-            print(f"从DolphinDB获取到 {len(raw_data)} 条原始记录")
-            print(f"原始数据列: {list(raw_data.columns)}")
+            if logger:
+                logger.info(f"从DolphinDB获取到 {len(raw_data)} 条原始记录")
+                logger.debug(f"原始数据列: {list(raw_data.columns)}")
+                logger.log_data_statistics(raw_data, "原始数据")
+            else:
+                print(f"从DolphinDB获取到 {len(raw_data)} 条原始记录")
+                print(f"原始数据列: {list(raw_data.columns)}")
             
             # 数据标准化处理
             if normalize_data:
-                print("开始Wind数据标准化...")
+                if logger:
+                    logger.info("开始Wind数据标准化...")
+                else:
+                    print("开始Wind数据标准化...")
                 # 构建交易日历文件路径
                 calendar_file = os.path.join(os.path.dirname(__file__), "calendar", "day.txt")
-                normalizer = WindNormalize1d(calendar_file_path=calendar_file)
+                normalizer = WindNormalize1d(calendar_file_path=calendar_file, logger=logger)
                 
                 try:
                     # 使用WindNormalize1d进行标准化
                     normalized_data = normalizer.normalize(raw_data)
                     
                     if not normalized_data.empty:
-                        print(f"标准化后数据: {len(normalized_data)} 条记录")
-                        print(f"标准化后列: {list(normalized_data.columns)}")
+                        if logger:
+                            logger.info(f"标准化后数据: {len(normalized_data)} 条记录")
+                            logger.debug(f"标准化后列: {list(normalized_data.columns)}")
+                            logger.log_data_statistics(normalized_data, "标准化后数据")
+                        else:
+                            print(f"标准化后数据: {len(normalized_data)} 条记录")
+                            print(f"标准化后列: {list(normalized_data.columns)}")
                         
                         data_to_save = normalized_data
                     else:
-                        print("警告: 标准化后数据为空，保存原始数据")
+                        if logger:
+                            logger.warning("标准化后数据为空，保存原始数据")
+                        else:
+                            print("警告: 标准化后数据为空，保存原始数据")
                         data_to_save = raw_data
                         
                 except Exception as norm_error:
-                    print(f"数据标准化出错: {norm_error}")
-                    print("保存原始数据")
+                    if logger:
+                        logger.error(f"数据标准化出错: {norm_error}", norm_error)
+                        logger.info("保存原始数据")
+                    else:
+                        print(f"数据标准化出错: {norm_error}")
+                        print("保存原始数据")
                     data_to_save = raw_data
             else:
-                print("跳过数据标准化，保存原始数据")
+                if logger:
+                    logger.info("跳过数据标准化，保存原始数据")
+                else:
+                    print("跳过数据标准化，保存原始数据")
                 data_to_save = raw_data
             
             # 确保 data 目录存在
@@ -195,57 +226,71 @@ def fetch_and_save_data(host, port, user, password, db_path, db_table, symbol, s
             filepath = os.path.join(data_dir, filename)
             
             data_to_save.to_csv(filepath, index=False)
-            print(f"数据已保存到: {filepath}")
+            if logger:
+                logger.info(f"数据已保存到: {filepath}")
+            else:
+                print(f"数据已保存到: {filepath}")
             
             return data_to_save
             
         else:
-            print(f"未找到 {symbol} 的数据")
+            if logger:
+                logger.warning(f"未找到 {symbol} 的数据")
+            else:
+                print(f"未找到 {symbol} 的数据")
             return None
             
     except Exception as e:
-        print(f"获取 {symbol} 数据时出错: {e}")
+        if logger:
+            logger.error(f"获取 {symbol} 数据时出错: {e}", e)
+        else:
+            print(f"获取 {symbol} 数据时出错: {e}")
         return None
     finally:
         s.close()
 
 
 if __name__ == "__main__":
-    load_dotenv(".env")
-    host = os.getenv("DOLPHINDB_HOST", "localhost")
-    port = int(os.getenv("DOLPHINDB_PORT", "8848"))
-    user = os.getenv("DOLPHINDB_USERNAME", "admin")
-    password = os.getenv("DOLPHINDB_PASSWORD", "123456")
-
-    print("连接到 DolphinDB 数据库", (host, port, user, password))
-    try:
-        s = session()
-        # 尝试连接DolphinDB
-        s.connect(host, port, user, password)
-        print("DolphinDB 连接成功")
-    except Exception as e:
-        print("连接 DolphinDB 失败:", e)
-
-    # 读取 code/csi300.txt 并去重
-    file_path = os.path.join(os.path.dirname(__file__), "code", "csi300.txt")
-    print(f"读取CSI300股票代码文件: {file_path}")
+    # 初始化日志系统
+    logger = get_logger(log_dir="log", log_level="INFO")
     
     try:
+        load_dotenv(".env")
+        host = os.getenv("DOLPHINDB_HOST", "localhost")
+        port = int(os.getenv("DOLPHINDB_PORT", "8848"))
+        user = os.getenv("DOLPHINDB_USERNAME", "admin")
+        password = os.getenv("DOLPHINDB_PASSWORD", "123456")
+
+        logger.info(f"连接到 DolphinDB 数据库 {host}:{port}")
+        try:
+            s = session()
+            # 尝试连接DolphinDB
+            s.connect(host, port, user, password)
+            logger.info("DolphinDB 连接成功")
+            s.close()
+        except Exception as e:
+            logger.error(f"连接 DolphinDB 失败: {e}", e)
+            raise
+
+        # 读取 code/csi300.txt 并去重
+        file_path = os.path.join(os.path.dirname(__file__), "code", "csi300.txt")
+        logger.info(f"读取CSI300股票代码文件: {file_path}")
+        
         # 使用新的去重函数，固定时间范围为2008-01-01到2025-08-01
         codes = get_unique_csi300_codes(file_path)
-        print(f"共获得 {len(codes)} 支去重后的CSI300股票")
-        print(f"数据时间范围: 2008-01-01 到 2025-08-01")
+        logger.info(f"共获得 {len(codes)} 支去重后的CSI300股票")
+        logger.info(f"数据时间范围: 2008-01-01 到 2025-08-01")
         
         # 显示前几个股票代码作为示例
         if codes:
-            print(f"\n前10支股票示例:")
+            logger.info(f"前10支股票示例:")
             for i, code in enumerate(codes[:10]):
-                print(f"  {i+1}. {code['original_symbol']} -> {code['symbol']}")
+                logger.info(f"  {i+1}. {code['original_symbol']} -> {code['symbol']}")
             if len(codes) > 10:
-                print(f"  ... 还有 {len(codes) - 10} 支股票")
+                logger.info(f"  ... 还有 {len(codes) - 10} 支股票")
         
         # 为所有记录获取数据并保存
-        print(f"\n开始获取并保存 {len(codes)} 支股票的数据...")
+        logger.info(f"开始获取并保存 {len(codes)} 支股票的数据...")
         db_path = 'dfs://WIND_AShareEODPrices'
         db_table = 'AShareEODPrices'
         
@@ -253,7 +298,7 @@ if __name__ == "__main__":
         failed_count = 0
         
         for i, item in enumerate(codes, 1):
-            print(f"\n[{i}/{len(codes)}] 处理 {item['symbol']} ({item['original_symbol']})")
+            logger.log_stock_start(item['symbol'], item['original_symbol'], i, len(codes))
             
             result = fetch_and_save_data(
                 host, port, user, password,
@@ -262,24 +307,24 @@ if __name__ == "__main__":
                 item['start_date'],    # 开始日期: 2008-01-01
                 item['end_date'],      # 结束日期: 2025-08-01
                 item['original_symbol'], # 原始 symbol (SZ000001)
-                normalize_data=True    # 启用数据标准化
+                normalize_data=True,   # 启用数据标准化
+                logger=logger         # 传入日志实例
             )
             
             if result is not None:
                 success_count += 1
-                print(f"✅ {item['symbol']} 数据获取和标准化完成 ({len(result)} 条记录)")
+                logger.log_stock_success(item['symbol'], item['original_symbol'], len(result))
             else:
                 failed_count += 1
-                print(f"❌ {item['symbol']} 数据处理失败")
-            
-            print("-" * 50)
+                logger.log_stock_failure(item['symbol'], item['original_symbol'], "数据获取或处理失败")
         
         # 总结
-        print(f"\n处理完成!")
-        print(f"成功: {success_count} 支股票")
-        print(f"失败: {failed_count} 支股票")
-        print(f"总计: {len(codes)} 支股票")
-        print(f"数据时间范围: 2008-01-01 到 2025-08-01")
+        logger.log_processing_summary(len(codes), success_count, failed_count)
+        logger.info(f"数据时间范围: 2008-01-01 到 2025-08-01")
             
     except Exception as e:
-        print("处理过程中出错:", e)
+        logger.critical(f"程序执行过程中发生严重错误: {e}", e)
+        raise
+    finally:
+        # 关闭日志系统
+        close_logger()

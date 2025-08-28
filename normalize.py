@@ -44,7 +44,7 @@ class WindNormalize1d:
     COLUMNS = ["open", "close", "high", "low", "volume"]
     DATE_FORMAT = "%Y-%m-%d"
 
-    def __init__(self, calendar_file_path: str = None, date_field_name: str = "date"):
+    def __init__(self, calendar_file_path: str = None, date_field_name: str = "date", logger=None):
         """
         初始化Wind数据标准化处理器
         
@@ -54,12 +54,19 @@ class WindNormalize1d:
             交易日历文件路径 (calendar/day.txt)
         date_field_name : str
             日期字段名称，默认为 "date"
+        logger : object
+            日志记录器实例，可选
         """
         self._date_field_name = date_field_name
+        self._logger = logger
         
         # 如果没有提供日历文件路径，使用默认路径
         if calendar_file_path is None:
-            print("Info: No calendar file path provided, using default 'calendar/day.txt'")
+            msg = "No calendar file path provided, using default 'calendar/day.txt'"
+            if self._logger:
+                self._logger.info(msg)
+            else:
+                print(f"Info: {msg}")
             calendar_file_path = "calendar/day.txt"
             
         self._calendar_list = self._load_calendar(calendar_file_path)
@@ -81,18 +88,30 @@ class WindNormalize1d:
         try:
             calendar_path = Path(calendar_file_path)
             if not calendar_path.exists():
-                print(f"Warning: Calendar file not found: {calendar_file_path}")
+                msg = f"Calendar file not found: {calendar_file_path}"
+                if self._logger:
+                    self._logger.warning(msg)
+                else:
+                    print(f"Warning: {msg}")
                 return None
                 
             with open(calendar_path, 'r') as f:
                 dates = [line.strip() for line in f.readlines() if line.strip()]
             
             calendar_list = pd.to_datetime(dates).tolist()
-            print(f"Info: Loaded {len(calendar_list)} trading days from calendar")
+            msg = f"Loaded {len(calendar_list)} trading days from calendar"
+            if self._logger:
+                self._logger.log_calendar_info(len(calendar_list), str(calendar_list[0].date()), str(calendar_list[-1].date()))
+            else:
+                print(f"Info: {msg}")
             return calendar_list
             
         except Exception as e:
-            print(f"Error: Error loading calendar: {e}")
+            msg = f"Error loading calendar: {e}"
+            if self._logger:
+                self._logger.error(msg, e)
+            else:
+                print(f"Error: {msg}")
             return None
 
     def _check_and_print_nan_stats(self, df: pd.DataFrame, stage: str = ""):
