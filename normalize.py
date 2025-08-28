@@ -12,7 +12,19 @@ import pandas as pd
 
 class WindNormalize1d:
     """
-    Wind数据标准化处理类，参考YahooNormalize1d实现
+    Wind数        # 9. 处理无效成交量数据
+        d        # 13. 设置索引名称
+        df.index.names = [self._date_field_name]
+        
+        # 最终检查NaN情况
+        self._check_and_print_nan_stats(df, "标准化完成前")
+        
+        return df.reset_index()c[(df["volume"] <= 0) | np.isnan(df["volume"]), df.columns] = np.nan
+        
+        # 检查处理无效成交量数据后的NaN情况
+        self._check_and_print_nan_stats(df, "处理无效成交量后")
+
+        # 10. 检测并修正异常数据 (参考Yahoo处理逻辑)处理类，参考YahooNormalize1d实现
     处理Wind数据库字段到qlib标准格式的转换
     """
     
@@ -82,6 +94,35 @@ class WindNormalize1d:
         except Exception as e:
             print(f"Error: Error loading calendar: {e}")
             return None
+
+    def _check_and_print_nan_stats(self, df: pd.DataFrame, stage: str = ""):
+        """
+        检查并打印DataFrame中NaN的统计情况
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            要检查的DataFrame
+        stage : str
+            当前处理阶段的描述
+        """
+        total_cells = df.size
+        total_nan = df.isna().sum().sum()
+        nan_percentage = (total_nan / total_cells * 100) if total_cells > 0 else 0
+        
+        print(f"Info: NaN statistics {stage}:")
+        print(f"  Total cells: {total_cells}, NaN cells: {total_nan} ({nan_percentage:.2f}%)")
+        
+        # 按列统计NaN
+        nan_by_column = df.isna().sum()
+        if nan_by_column.sum() > 0:
+            print("  NaN by column:")
+            for col, count in nan_by_column.items():
+                if count > 0:
+                    percentage = (count / len(df) * 100) if len(df) > 0 else 0
+                    print(f"    {col}: {count} ({percentage:.2f}%)")
+        else:
+            print("  No NaN values found")
 
     def map_wind_fields(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -167,6 +208,9 @@ class WindNormalize1d:
         # 1. 映射字段名
         df = self.map_wind_fields(df)
         
+        # 检查原始数据NaN情况
+        self._check_and_print_nan_stats(df, "字段映射后")
+        
         # 2. 基础数据处理
         columns = copy.deepcopy(self.COLUMNS)
         df = df.copy()
@@ -188,12 +232,22 @@ class WindNormalize1d:
                 ]
                 .index
             )
-            print('重新索引')
+            print('重新索引成功')
         
         # 6. 排序
         df.sort_index(inplace=True)
         
-        # 7. 处理无效成交量数据
+        # 7. 检查并打印NaN情况
+        self._check_and_print_nan_stats(df, "交易日历重新索引后")
+        
+        # 8. 对close列进行前向填充
+        if "close" in df.columns:
+            nan_count_before = df["close"].isna().sum()
+            df["close"] = df["close"].ffill()
+            nan_count_after = df["close"].isna().sum()
+            print(f"Info: Close column forward fill - NaN before: {nan_count_before}, after: {nan_count_after}")
+        
+        # 9. 处理无效成交量数据
         df.loc[(df["volume"] <= 0) | np.isnan(df["volume"]), df.columns] = np.nan
 
         # 8. 检测并修正异常数据 (参考Yahoo处理逻辑)
